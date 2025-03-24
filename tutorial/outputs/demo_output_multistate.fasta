@@ -19,7 +19,7 @@ AUGCUCGC
 >sample=5, seed=0, temperature=1.0, perplexity=1.4704, recovery=0.4706, edit_dist=36, sc_score=0.8293
 GAUGUCACCUAAGCGUUUUAUUAUGGCAAGCGCGUUUAAGCGGACUCCCUUAAAGAGUCC
 AUGGUGAC
->sample=6, seed=0, temperature=1.0, perplexity=1.2798, recovery=0.5588, edit_dist=30, sc_score=0.9354
+>sample=6, seed=0, temperature=1.0, perplexity=1.2798, recovery=0.5588, edit_dist=30, sc_score=0.9517
 GGGGGGAGCUAAGCCUCUUGUUAGGGUAGGGGCGUUUAAGCGGACUCCCUUAAAGAGUCC
 CUGCUCCC
 >sample=7, seed=0, temperature=1.0, perplexity=1.3461, recovery=0.5147, edit_dist=33, sc_score=0.7013

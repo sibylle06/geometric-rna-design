@@ -16,7 +16,7 @@ from Bio.Seq import Seq
 from Bio.SeqRecord import SeqRecord
 
 from src.data.featurizer import RNAGraphFeaturizer
-from src.models import AutoregressiveMultiGNNv1
+from src.models import AutoregressiveMultiGNNv1, AutoregressiveEGNNv1
 from src.data.data_utils import get_backbone_coords
 from src.evaluator import edit_distance, self_consistency_score_eternafold
 from src.constants import (
@@ -127,10 +127,21 @@ class gRNAde(object):
             drop_rate = DROP_RATE,
             out_dim = OUT_DIM
         )
+        # HIDDEN_DIM = NODE_H_DIM[0]
+        # self.model = AutoregressiveEGNNv1(
+        #     node_in_dim = NODE_IN_DIM[0],
+        #     hidden_dim = HIDDEN_DIM,
+        #     num_layers = NUM_LAYERS,
+        #     out_dim = OUT_DIM
+        # )
+
         # Load model checkpoint
         self.model_path = CHECKPOINT_PATH[split][max_num_conformers]
         print(f"    Loading model checkpoint: {self.model_path}")
         self.model.load_state_dict(torch.load(self.model_path, map_location=torch.device('cpu')))
+
+        # # Skip checkpoint loading (new architecture, no pretrained weights)
+        # print("    No pretrained checkpoint found — using randomly initialized EGNN model")
 
         # Transfer model to device in eval mode
         self.model = self.model.to(device)
@@ -296,7 +307,7 @@ class gRNAde(object):
         else:
             logit_bias = None
         
-        # sample n_samples from model for single data point: n_samples x seq_len
+        # # sample n_samples from model for single data point: n_samples x seq_len
         samples, logits = self.model.sample(
             featurized_data, n_samples, temperature, logit_bias, return_logits=True)
 

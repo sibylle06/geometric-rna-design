@@ -10,6 +10,7 @@ from torch import nn
 import torch.nn.functional as F
 from torch.distributions import Categorical
 import torch_geometric
+from torch_geometric.nn import GCNConv
 
 from src.layers import *
 
@@ -396,3 +397,113 @@ class NonAutoregressiveMultiGNNv1(torch.nn.Module):
                h_E1.sum(dim=1) / n_conf_true[edge_index[0]].unsqueeze(2))  # (n_edges, d_ve, 3)
 
         return h_V, h_E
+    
+
+class AutoregressiveEGNNv1(nn.Module):
+    def __init__(self, node_in_dim=64, hidden_dim=128, num_layers=3, out_dim=4):
+        super().__init__()
+        self.hidden_dim = hidden_dim
+        self.out_dim = out_dim
+
+        self.node_proj = nn.Linear(node_in_dim, hidden_dim)
+        self.egnn_layers = nn.ModuleList([EGNNLayer(hidden_dim, hidden_dim) for _ in range(num_layers)])
+        self.decoder_layers = nn.ModuleList([nn.GRUCell(hidden_dim, hidden_dim) for _ in range(num_layers)])
+        self.output_layer = nn.Linear(hidden_dim, out_dim)
+        self.embed_tokens = nn.Embedding(out_dim, hidden_dim)
+
+    def forward(self, batch):
+        # Standard forward for training (with teacher forcing)
+        x = self.node_proj(batch.node_s)
+        pos = batch.pos
+        edge_index = batch.edge_index
+        seq = batch.seq
+
+        for layer in self.egnn_layers:
+            x = layer(x, pos, edge_index)
+
+        decoder_input = self.embed_tokens(seq)
+        for i, gru in enumerate(self.decoder_layers):
+            x = gru(decoder_input, x)
+
+        logits = self.output_layer(x)
+        return logits
+
+    @torch.no_grad()
+    def sample(
+        self,
+        batch,
+        n_samples: int = 1,
+        temperature: float = 1.0,
+        logit_bias: Optional[torch.Tensor] = None,
+        return_logits: bool = False
+    ):
+        """
+        Samples sequences autoregressively from the learned distribution.
+
+        Args:
+            batch (torch_geometric.data.Data): input graph
+            n_samples (int): number of sequences to generate
+            temperature (float): softmax temperature for sampling
+            logit_bias (Tensor): optional [n_nodes, 4] bias added to logits
+            return_logits (bool): if True, returns logits along with samples
+
+        Returns:
+            samples: [n_samples, n_nodes]
+            logits: [n_samples, n_nodes, 4] (if return_logits is True)
+        """
+        device = batch.edge_index.device
+        x = self.node_proj(batch.node_s)      # [n_nodes, hidden_dim]
+        pos = batch.pos                       # [n_nodes, 3]
+        edge_index = batch.edge_index         # [2, num_edges]
+        n_nodes = x.size(0)
+
+        print("x:", x.shape)
+        print("pos:", pos.shape)
+        print("n_samples:", n_samples)
+
+        # Repeat features for n_samples
+        x = x.repeat_interleave(n_samples, dim=0)            # [n_samples * n_nodes, hidden_dim]
+        pos = pos.repeat_interleave(n_samples, dim=0)        # [n_samples * n_nodes, 3]
+
+        # Offset edge_index for each copy of the graph
+        edge_index_list = []
+        for i in range(n_samples):
+            edge_index_list.append(edge_index + i * n_nodes)
+        edge_index = torch.cat(edge_index_list, dim=1)  # [2, n_edges * n_samples]
+
+        # Encode with EGNN
+        for layer in self.egnn_layers:
+            x = layer(x, pos, edge_index)
+
+        # Initialize hidden state for decoding
+        h = x.clone()
+        logits_all = torch.zeros(n_samples, n_nodes, self.out_dim, device=device)
+        samples = torch.zeros(n_samples, n_nodes, dtype=torch.long, device=device)
+
+        for t in range(n_nodes):
+            if t == 0:
+                token_emb = torch.zeros(n_samples * n_nodes, self.hidden_dim, device=device)
+            else:
+                prev_tokens = samples[:, t - 1].reshape(-1)
+                token_emb = self.embed_tokens(prev_tokens)  # [n_samples * n_nodes, hidden_dim]
+
+            # Pass through decoder layers
+            for gru in self.decoder_layers:
+                h = gru(token_emb, h)
+
+            logits = self.output_layer(h)  # [n_samples * n_nodes, 4]
+            logits = logits.view(n_samples, n_nodes, self.out_dim)
+
+            # Apply logit bias if provided
+            if logit_bias is not None:
+                logits[:, t, :] += logit_bias[t]
+
+            probs = F.softmax(logits[:, t, :] / temperature, dim=-1)  # [n_samples, 4]
+            sampled = Categorical(probs).sample()                     # [n_samples]
+            samples[:, t] = sampled
+            logits_all[:, t, :] = logits[:, t, :]
+
+        if return_logits:
+            return samples, logits_all
+        else:
+            return samples

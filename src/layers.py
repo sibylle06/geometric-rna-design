@@ -11,6 +11,7 @@ import torch.nn.functional as F
 import torch_geometric
 from torch_geometric.nn import MessagePassing
 from torch_scatter import scatter_add
+from torch_geometric.utils import add_self_loops
 
 #########################################################################
 
@@ -381,6 +382,43 @@ class GVP(nn.Module):
         
         return (s, v) if self.vo else s
     
+#########################################################################
+
+
+# EGNN Layer
+class EGNNLayer(MessagePassing):
+    def __init__(self, in_dim, out_dim):
+        super().__init__(aggr='add')
+        self.edge_mlp = nn.Sequential(
+            nn.Linear(2 * in_dim + 1, out_dim),
+            nn.ReLU(),
+            nn.Linear(out_dim, out_dim)
+        )
+        self.coord_mlp = nn.Sequential(
+            nn.Linear(out_dim, 1),
+            nn.Tanh()
+        )
+        self.node_mlp = nn.Sequential(
+            nn.Linear(in_dim + out_dim, out_dim),
+            nn.ReLU()
+        )
+
+    def forward(self, x, pos, edge_index):
+        self.coord_updates = []
+        edge_index, _ = add_self_loops(edge_index, num_nodes=x.size(0))
+        return self.propagate(edge_index, x=x, pos=pos)
+
+    def message(self, x_i, x_j, pos_i, pos_j):
+        dist = torch.norm(pos_i - pos_j, dim=1, keepdim=True)
+        edge_input = torch.cat([x_i, x_j, dist], dim=-1)
+        edge_feat = self.edge_mlp(edge_input)
+        coord_update = (pos_i - pos_j) * self.coord_mlp(edge_feat)
+        self.coord_updates.append(coord_update)
+        return edge_feat
+
+    def update(self, aggr_out, x):
+        return self.node_mlp(torch.cat([x, aggr_out], dim=-1))
+
 #########################################################################
 
 class _VDropout(nn.Module):
